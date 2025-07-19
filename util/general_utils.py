@@ -1,0 +1,128 @@
+import numpy as np
+import os
+import torch
+import inspect
+
+from datetime import datetime
+from loguru import logger
+
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def init_experiment(args, runner_name=None, exp_id=None):
+    # assert args.save_freq % args.eval_freq == 0, 'args.save_freq mod args.eval_freq != 0'
+    # Get filepath of calling script
+    if runner_name is None:
+        runner_name = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))).split(".")[-2:]
+
+    root_dir = os.path.join(args.exp_root, *runner_name)
+
+    if not os.path.exists(root_dir):
+        os.makedirs(root_dir)
+
+    # Either generate a unique experiment ID, or use one which is passed
+    if exp_id is None:
+
+        if args.exp_name is None:
+            raise ValueError("Need to specify the experiment name")
+        # Unique identifier for experiment
+        now = '{}_({:02d}.{:02d}.{}_|_'.format(args.exp_name, datetime.now().day, datetime.now().month, datetime.now().year) + \
+              datetime.now().strftime("%S.%f")[:-3] + ')'
+
+        log_dir = os.path.join(root_dir, 'log', args.dataset_name, now)
+        while os.path.exists(log_dir):
+            now = '({:02d}.{:02d}.{}_|_'.format(datetime.now().day, datetime.now().month, datetime.now().year) + \
+                  datetime.now().strftime("%S.%f")[:-3] + ')'
+
+            log_dir = os.path.join(root_dir, 'log', now)
+
+    else:
+
+        log_dir = os.path.join(root_dir, 'log', f'{exp_id}')
+
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+        
+    logger.add(os.path.join(log_dir, 'log.txt'))
+    args.logger = logger
+    args.log_dir = log_dir
+
+    # Instantiate directory to save models to
+    model_root_dir = os.path.join(args.log_dir, 'checkpoints')
+    if not os.path.exists(model_root_dir):
+        os.mkdir(model_root_dir)
+
+    args.model_dir = model_root_dir
+    args.model_path = os.path.join(args.model_dir, 'model.pt')
+
+    print(f'Experiment saved to: {args.log_dir}')
+
+    hparam_dict = {}
+
+    for k, v in vars(args).items():
+        if isinstance(v, (int, float, str, bool, torch.Tensor)):
+            hparam_dict[k] = v
+    
+    print(runner_name)
+    print(args)
+    args.logger.info(args)
+
+    return args
+
+def get_mean_lr(optimizer):
+    return torch.mean(torch.Tensor([param_group['lr'] for param_group in optimizer.param_groups])).item()
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise ValueError('Boolean value expected.')
+    
+def compute_weights(t_values, T_start, T_end, lambda_final):
+    """
+    Compute weights for a given array of time steps t_values based on the specified function.
+
+    Parameters:
+        t_values (numpy.ndarray): Array of time steps t.
+        T_start (float): Start time for the cosine function.
+        T_end (float): End time for the cosine function.
+        lambda_final (float): Scaling factor for the weight function.
+
+    Returns:
+        numpy.ndarray: Array of weights f_c(t).
+    """
+    weights = np.zeros_like(t_values, dtype=float)
+
+    # Case 2: T_start ≤ t < T_end
+    mask_cosine = (t_values >= T_start) & (t_values < T_end)
+    weights[mask_cosine] = (
+        (lambda_final / 2) * (1 - np.cos(((t_values[mask_cosine] - T_start) / (T_end - T_start)) * np.pi))
+    )
+
+    # Case 3: t ≥ T_end
+    mask_constant = t_values >= T_end
+    weights[mask_constant] = lambda_final
+
+    return weights

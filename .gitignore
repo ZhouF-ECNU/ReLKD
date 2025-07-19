@@ -1,0 +1,9 @@
+__pycache__
+outputs
+pretrained_models
+.vscode
+*.out
+screenlog.*
+*.ipynb
+extracted_features
+debug_imgs
